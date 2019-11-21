@@ -1,0 +1,5 @@
+Executers 工具类
+Execute   最基础的接口只提供execute方法
+ExecuteService 二级接口继承Execute并在上面做了扩展可以看成是真正的线程池接口
+AbstractExecutorService 抽象类 继承了ExecuteService并且提供了一些默认的实现
+ThreadPoolExecutor  ExecuteService的默认实现继承自AbstractExecutorService 作为线程池的主要类
