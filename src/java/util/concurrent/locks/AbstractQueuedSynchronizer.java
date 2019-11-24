@@ -193,12 +193,19 @@ public abstract class AbstractQueuedSynchronizer extends AbstractOwnableSynchron
   /**
    * 获取独占锁
    *总结：
-   *          首先调用tryAcquire尝试获取锁，获取失败则调用addWaiter，将该节点以独占的状态入队，加入到队列的末尾，由于可能存在多个线程调用CAS操作将节点加入到CLH队列末尾，因此enq方法以for循环的方式进行，保证该节点能添加到队列末尾。
+   *          首先调用tryAcquire尝试获取锁，获取失败则调用addWaiter，将该节点以独占的状态入队，加入到队列的末尾，
+   *        由于可能存在多个线程调用CAS操作将节点加入到CLH队列末尾，因此enq方法以for循环的方式进行，保证该节点能添加到队列末尾。
    * 然后调用acquireQueued在队列中获取锁，过程为：检查该节点node的前驱节点是否为head节点
    * 如果是head节点并且调用tryAcquire获取锁成功，则setHead，将node作为当前队列的队首，原先的首节点出队。
-   * 否则，调用shouldParkAfterFailedAcquire查看当前节点的线程是否应该park，具体为：如果当前结点node的前一个节点的waitStatus为signal则表示node节点应该park等待前一个节点唤醒它，返回true;如果当前节点的小于0，即为cancelled，则应该删除node前面连续的cancelled节点，将node的prev指针指向靠近node的第一个非cancelled节点，返回false，重新判断前驱状态；若为0或者为PROPAGATE，则CAS将前驱状态改成signal返回false，重新判断。
+   * 否则，调用shouldParkAfterFailedAcquire查看当前节点的线程是否应该park，具体为：如果当前结点node的前一个节点的waitStatus为signal则表示node节点应该
+   * park等待前一个节点唤醒它，返回true;如果当前节点的小于0，即为cancelled，
+   * 则应该删除node前面连续的cancelled节点，将node的prev指针指向靠近node的第一个非cancelled节点，返回false，
+   * 重新判断前驱状态；若为0或者为PROPAGATE，则CAS将前驱状态改成signal返回false，重新判断。
    * 如果应该park，则调用parkAndCheckInterrupt将当前线程park，否则就进行下次循环。
-   * 如果以上过程中抛出异常并且该节点还没有成功获取锁，则指向cancelAcquire,将当前节点的状态改为cancelled，该节点不在参与获取锁，同时删除该节点前面连续的cancelled状态的节点，若删除之后发现该节点的前一个节点是head，则应该调用unparkSuccessor唤醒后继。
+   * 如果以上过程中抛出异常并且该节点还没有成功获取锁，
+   * 则指向cancelAcquire,将当前节点的状态改为cancelled，
+   * 该节点不在参与获取锁，同时删除该节点前面连续的cancelled状态的节点，
+   * 若删除之后发现该节点的前一个节点是head，则应该调用unparkSuccessor唤醒后继。
    */
   public final void acquire(int arg) {
     //tryAcquire尝试获得该arg，失败则先addWaiter(Node.EXCLUSIVE)加入等待队列，然后acquireQueued。
@@ -206,7 +213,7 @@ public abstract class AbstractQueuedSynchronizer extends AbstractOwnableSynchron
         && acquireQueued(
             addWaiter(Node.EXCLUSIVE),
             arg))
-      //中断当前线程
+      //如果acquireQueued()再获取锁的过程中被中断则中断当前线程
       selfInterrupt();
   }
 
@@ -263,12 +270,20 @@ private void doAcquireShared(int arg) {
     }
 }
 
+  /**
+   * (1) 创建节点
+   * (2) 如果尾节点不为null直接加到尾节点后面并且设置尾节点为当前节点并且返回新节点
+   * (3) 如果尾节点为null或者设置尾节点失败(并发情况设置尾节点)则enq进行自旋锁的入节点操作
+   */
   //mode:设置该节点是共享的还是独占的， Node.EXCLUSIVE for exclusive, Node.SHARED for shared
   private Node addWaiter(Node mode) {
 
+    // 独占锁的节点
     Node node = new Node(Thread.currentThread(), mode);
+
     //pred指向尾节点
     Node pred = tail;
+
 
     //尾节点不为null
     if (pred != null) {
@@ -287,6 +302,14 @@ private void doAcquireShared(int arg) {
     return node;
   }
 
+  /**
+   *  ----node 封装了线程与一些运行状态 还有内部队列的一些状态
+   * （1）  如果尾节点tail(AQS的成员变量)为null 则证明队列没进行过初始化进行初始化(设置tail 和  head 都为 new Node())之后再循环一次
+   * （2）  将当前node节点加入到原节点之后并设置tail节点为新加入的节点
+   *
+   * @param node
+   * @return
+   */
   private Node enq(final Node node) {
 
     //循环，原因：可能同时存在多个线程修改tail指针
@@ -319,14 +342,11 @@ private void doAcquireShared(int arg) {
   }
 
   /**
-   * 判断当前节点的前置节点是否是头节点，来尝试获取锁， 如果获取锁成功，则当前节点就会成为新的头节点 获取锁失败后，进入挂起逻辑。 head
-   * 节点代表当前持有锁的线程，那么如果当前节点的 pred 节点是 head 节点，很可能此时 head 节点已经释放锁了，所以此时需要再次尝试获取锁。
-   *
-   * @param node
-   * @param arg
-   * @return
+   * （1）  获取当前锁的前置节点
+   * （2）  如果前置节点是头节点则再次尝试获取锁，如果获取成功修改当前节点为头节点 返回当前中断标志位
+   * （3）  获取失败检查当前线程是否应该被挂起 (如果当前线程的前置节点的状态为SINGL则当前线程就应该被挂起)
+   * （4）  如果应该被挂起则挂起当前线程醒来之后返回自己的中断标志位继续走循环逻辑
    */
-
   final boolean acquireQueued(final Node node, int arg) {
     boolean failed = true;
     try {
@@ -338,20 +358,16 @@ private void doAcquireShared(int arg) {
 
         //前驱p是首节点，则当前线程尝试获取锁
         if (p == head && tryAcquire(arg)) {
-
           //获取成功，则将当前节点设置成首节点
           setHead(node);
-          //删除前驱的next引用
           p.next = null; // help GC
           failed = false;
-
           //返回中断标志
           return interrupted;
         }
-
         //node的前驱节点p不是首节点head或者获取锁失败则通过shouldParkAfterFailedAcquire来判断当前node的线程是否应该挂起park
-        if (shouldParkAfterFailedAcquire(p, node) &&
-                parkAndCheckInterrupt()) //应该park，则调用parkAndCheckInterrupt忽略中断进行挂起
+        //应该park，则调用parkAndCheckInterrupt忽略中断进行挂起
+        if (shouldParkAfterFailedAcquire(p, node) && parkAndCheckInterrupt())
           interrupted = true;
         //当该线程被唤醒时，尝试再次判断前驱节点p是否为head，如果是则再次尝试获取锁，这样做的目的是为了维持FIFO的顺序
         //采用阻塞park和唤醒unpark的方式进行自旋式检测获取锁
@@ -359,15 +375,17 @@ private void doAcquireShared(int arg) {
       }
     } finally {
       if (failed)
+        //获取锁的过程中抛出异常则取消当前节点获取锁的逻辑
         cancelAcquire(node);
     }
   }
 
 
-//shouldParkAfterFailedAcquire:当前节点获取锁失败时，是否应该进入阻塞状态
+  //shouldParkAfterFailedAcquire:当前节点获取锁失败时，是否应该进入阻塞状态
   //（1）前驱节点的waitStatus==SINGNAL(-1):则说明该节点需要继续等待直至被前驱节点唤醒,返回true.
-  //（2）前驱节点的waitStatus==cancelled(1):则说明前驱节点曾经发生过中断或者超时，则前驱节点是一个无效节点，继续向前寻找一个node，该node的waitStatus<0，同时将waitStatus>0(cancelled)的节点删除，返回false(重新检测)。若新的前驱节点是head且tryAcquire获取成功，则该线程成功获取到锁。
-  //（3）前驱节点的waitStatus==-3或0（PROPAGATE）:共享锁向后传播，因此需要将前驱节点的waitStatus修改成signal,然后返回false，重新检测前驱节点；0，表示前驱节点是队列尾节点，该节点新添加进来，修改为signal表示原先尾节点后面还有需要唤醒的节点（该节点）。
+  //（2）前驱节点的waitStatus==cancelled(1):则说明前驱节点曾经发生过中断或者超时，则前驱节点是一个无效节点，继续向前寻找一个node，
+  //    同时将waitStatus>0(cancelled)的节点删除，返回false(重新检测)。
+  //（3）前驱节点的waitStatus==-3或0（PROPAGATE）:共享锁向后传播，因此需要将前驱节点的waitStatus修改成signal,然后返回false，
   private static boolean shouldParkAfterFailedAcquire(Node pred, Node node) {
     //ws：前驱节点的状态
     int ws = pred.waitStatus;
@@ -383,7 +401,7 @@ private void doAcquireShared(int arg) {
       pred.next = node;
     } else {
       //状态是-3PROPAGATE或0（CONDITION状态只能在CONDITION队列中出现，不会出现在CLH队列中）,
-      // 则将pred前驱节点的状态设置成SIGNAL状态，表示pred节点被唤醒时，需要park它的后继者。
+      // 则将pred前驱节点的状态设置成SIGNAL状态，表示pred节点被唤醒时,需要park它的后继者。
       compareAndSetWaitStatus(pred, ws, Node.SIGNAL);
     }
     return false;
@@ -414,10 +432,15 @@ private void doAcquireShared(int arg) {
 
   static final long spinForTimeoutThreshold = 1000L;
 
+  /**
+   *  （1） 如果该节点是一个cancelled的节点，则不用管它；否则，将该节点状态置0清空，表示该节点已经获取过锁了，要出队。
+   */
   //唤醒node的第一个非cancelled状态的node节点
   private void unparkSuccessor(Node node) {
     int ws = node.waitStatus;
-    //如果该节点是一个cancelled的节点，则不用管它；否则，将该节点状态置0清空，表示该节点已经获取过锁了，要出队。
+
+    //如果该节点是一个cancelled的节点，则不用管它；否则，将该节点状态置0清空，表示该节点已经获取过锁了，要出队（因为再执行获取锁的时候抛出异常了 所以必须标记为获取过锁的状态）。
+    // 只有最后一个节点的状态是
     if (ws < 0)
       compareAndSetWaitStatus(node, ws, 0);
 
@@ -509,7 +532,7 @@ private void doAcquireShared(int arg) {
   }
 
 
-  //当acquireQueued的try中抛出异常，并且node没有成功获取锁时，需要通过cancelAcquire方法取消node节点
+  //当acquireQueued的try中抛出异常node没有成功获取锁时，需要通过cancelAcquire方法取消node节点
   //主要功能：
   //（1）重新设置node的prev指针（相当于删除了node的前面连续几个cancelled节点）
   //（2）将node的状态设置为cancelled
@@ -521,28 +544,27 @@ private void doAcquireShared(int arg) {
       return;
 
     node.thread = null;
-
     //如果node的前驱节点也是一个cancelled的节点，则修改node的prev指针，直至指向一个不是cancelled状态的node
     //相当于删除了node到prev之前的状态为calcelled的前驱节点
     //原因：若新的前驱节点是head节点，则需要在该node失效时唤醒node的后继节点
     Node pred = node.prev;
+    // 》0 cacled
     while (pred.waitStatus > 0)
       node.prev = pred = pred.prev;
 
-    //predNext是一个cancelled的节点（可能是node）。
+
+    //前面找到了第一个不是cacelled的节点并且设置为当前节点的前置节点获取当前节点
     Node predNext = pred.next;
-    //直接将node的状态设置为cancelled
+    // 直接设置当前节点为CANCELLED
     node.waitStatus = Node.CANCELLED;
 
-    //如果是尾节点,直接删除node
+    //如果是尾节点,直接删除node因为已经取消获取锁了
     if (node == tail && compareAndSetTail(node, pred)) {
       compareAndSetNext(pred, predNext, null);
     } else {
       // 当pred不是首节点时，如果node的后继节点需要signal，则尝试将pred的状态设置成signal，并且将pred的next指针指向node的next节点
       int ws;
-      if (pred != head
-          && ((ws = pred.waitStatus) == Node.SIGNAL
-              || (ws <= 0 && compareAndSetWaitStatus(pred, ws, Node.SIGNAL)))
+      if (pred != head && ((ws = pred.waitStatus) == Node.SIGNAL || (ws <= 0 && compareAndSetWaitStatus(pred, ws, Node.SIGNAL)))
           && pred.thread != null) {
         Node next = node.next;
         if (next != null && next.waitStatus <= 0)
@@ -556,6 +578,9 @@ private void doAcquireShared(int arg) {
     }
   }
 
+  /**
+   * 中断当前线程
+   */
   static void selfInterrupt() {
     Thread.currentThread().interrupt();
   }
